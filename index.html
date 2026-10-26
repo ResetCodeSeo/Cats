@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, viewport-fit=cover">
 <title>Мурлык и Звёздные Крыши</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M6 14 L4 4 L12 9 Z' fill='%23F5A623'/%3E%3Cpath d='M26 14 L28 4 L20 9 Z' fill='%23F5A623'/%3E%3Ccircle cx='16' cy='18' r='11' fill='%23F5A623'/%3E%3Ccircle cx='16' cy='19' r='6' fill='%23FFF8E7'/%3E%3Ccircle cx='12' cy='15' r='2' fill='%232B8A3E'/%3E%3Ccircle cx='20' cy='15' r='2' fill='%232B8A3E'/%3E%3Cpath d='M14 20 L16 22 L18 20 Z' fill='%23F2C4B0'/%3E%3C/svg%3E">
 <style>
@@ -26,6 +26,10 @@ canvas { width:100%; height:100%; display:block; touch-action:none; }
 #hud {
   position:absolute; top:0; left:0; right:0;
   padding:10px 14px;
+  padding-top:calc(10px + env(safe-area-inset-top));
+  padding-bottom:calc(10px + env(safe-area-inset-bottom));
+  padding-left:calc(14px + env(safe-area-inset-left));
+  padding-right:calc(14px + env(safe-area-inset-right));
   display:flex; gap:14px; align-items:center;
   font-weight:600; font-size:clamp(13px,1.6vw,17px);
   pointer-events:none;
@@ -154,6 +158,12 @@ h2 { font-size:clamp(1.2rem,3vw,1.8rem); }
 @media (max-height:420px){
   #hud { padding:6px 10px; font-size:12px; gap:8px; }
 }
+/* Вертикальная мобилка: stage на всю ширину, подсказка компактнее */
+@media (orientation: portrait){
+  #stage { width:min(100vw, 100vh * 16 / 9); }
+  #hint { font-size:.75rem; bottom:calc(7% + env(safe-area-inset-bottom)); }
+  .screen .row { gap:8px; }
+}
 </style>
 </head>
 <body>
@@ -174,6 +184,9 @@ h2 { font-size:clamp(1.2rem,3vw,1.8rem); }
     </button>
     <button class="hbtn" id="btnMute" aria-label="Звук">
       <svg width="16" height="16" viewBox="0 0 16 16"><path d="M2 5h3l4-3v12l-4-3H2z" fill="currentColor"/><path d="M11 5l4 4m0-4l-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" id="muteX" style="display:none"/></svg>
+    </button>
+    <button class="hbtn" id="btnFull" aria-label="Полный экран">
+      <svg width="16" height="16" viewBox="0 0 16 16"><path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round"/></svg>
     </button>
   </div>
   <div id="mileBar"></div>
@@ -735,10 +748,14 @@ window.addEventListener('keydown', function(e) {
     e.preventDefault();
     gestureStart();
     inputSlide();
-  } else if (k === 'Escape' || k === 'p' || k === 'P') {
+  } else if (k === 'Escape' || k === 'p' || k === 'P' || k === 'з' || k === 'З') {
     e.preventDefault();
     gestureStart();
     inputPause();
+  } else if (k === 'f' || k === 'F' || k === 'р' || k === 'Р') {
+    // F — полный экран (R на русской раскладке — та же клавиша)
+    e.preventDefault();
+    toggleFullscreen();
   }
 }, { passive: false });
 window.addEventListener('keyup', function(e) {
@@ -757,6 +774,16 @@ document.addEventListener('visibilitychange', function() {
     if (Game.state === 'playing') pauseGame();
   }
 });
+// полный экран: кнопка в HUD и клавиша F; canvas пересчитывается при смене режима
+function toggleFullscreen() {
+  const el = document.documentElement;
+  if (document.fullscreenElement) {
+    document.exitFullscreen();
+  } else if (el.requestFullscreen) {
+    el.requestFullscreen().catch(function() {});
+  }
+}
+document.addEventListener('fullscreenchange', setupCanvas);
 canvas.addEventListener('pointerdown', function(e) {
   e.preventDefault();
   gestureStart();
@@ -831,6 +858,7 @@ const Game = {
   scoreMultiplier: 1,
   // «на волосок»: серия и таймер; метель; шлейф скина
   grazeStreak: 0, grazeT: 0, blizzardT: 0, trailT: 0,
+  downpourT: 0, gustT: 0,   // события: ливень и порыв ветра
   // кэш палитры
   _palCache: null, _palPhase: -1, _palT: 0
 };
@@ -853,6 +881,7 @@ function resetRun() {
   cat.jumps = 0; cat.slideT = 0; cat.slideCd = 0;
   cat.holdT = 0; cat.coyoteT = COYOTE; cat.bufferT = 0;
   Game.rainA = 0; Game.windA = 0;
+  Game.downpourT = 0; Game.gustT = 0;
   // забег дня: весь рандом уровня детерминирован сидом от даты
   gameRng = Game.daily ? mulberry32(dateSeed()) : Math.random;
   cat.squash = 0; cat.bounce = 0; cat.flip = 0; cat.flipActive = false;
@@ -936,7 +965,7 @@ const EVENTS = {
     apply: function() {
       for (let i = 0; i < 4; i++) {
         Game.items.push({
-          kind: 'fish',
+          kind: i === 3 && gameRng() < 0.6 ? 'golden' : 'fish',
           wx: Game.worldOffset + W + 200 + i * 220,
           y: GROUND_Y - 120, dead: false, eventFish: true
         });
@@ -949,6 +978,20 @@ const EVENTS = {
     // метель: снег и шквалистый ветер; подкаты длиннее, «на волосок» ×2
     apply: function() { Game.blizzardT = 6; },
     cleanup: function() { Game.blizzardT = 0; }
+  },
+  downpour: {
+    name: 'Ливень',
+    duration: 6,
+    // ливень: крыши мокрые — подкат длиннее; рыбы сыплются чаще
+    apply: function() { Game.downpourT = 6; },
+    cleanup: function() { Game.downpourT = 0; }
+  },
+  gust: {
+    name: 'Порыв ветра',
+    duration: 5,
+    // порыв: антенны качаются сильнее usual, листву сносит вправо
+    apply: function() { Game.gustT = 5; },
+    cleanup: function() { Game.gustT = 0; }
   }
 };
 
@@ -1007,16 +1050,20 @@ function spawnObstacle() {
   if (d < 3000) {
     type = r < 0.5 ? 'pipe' : 'antenna';
   } else if (d < 8000) {
-    type = r < 0.28 ? 'pipe' : r < 0.5 ? 'antenna' :
-           r < 0.70 ? 'pigeon' : r < 0.85 ? 'gap' : 'dog';
+    type = r < 0.26 ? 'pipe' : r < 0.46 ? 'antenna' :
+           r < 0.62 ? 'pigeon' : r < 0.76 ? 'gap' : r < 0.86 ? 'dog' :
+           r < 0.94 ? 'springboard' : 'sleepCat';
   } else if (d < 15000) {
-    type = r < 0.22 ? 'pipe' : r < 0.42 ? 'antenna' :
-           r < 0.58 ? 'pigeon' : r < 0.72 ? 'gap' : r < 0.85 ? 'dog' :
-           r < 0.93 ? 'movingPipe' : 'fallingIce';
+    type = r < 0.21 ? 'pipe' : r < 0.39 ? 'antenna' :
+           r < 0.53 ? 'pigeon' : r < 0.66 ? 'gap' : r < 0.76 ? 'dog' :
+           r < 0.83 ? 'springboard' : r < 0.88 ? 'sleepCat' :
+           r < 0.94 ? 'movingPipe' : 'fallingIce';
   } else {
-    type = r < 0.18 ? 'pipe' : r < 0.35 ? 'antenna' :
-           r < 0.50 ? 'pigeon' : r < 0.62 ? 'gap' : r < 0.75 ? 'dog' :
-           r < 0.85 ? 'movingPipe' : r < 0.93 ? 'fallingIce' : 'doubleTrap';
+    type = r < 0.17 ? 'pipe' : r < 0.32 ? 'antenna' :
+           r < 0.45 ? 'pigeon' : r < 0.55 ? 'gap' : r < 0.64 ? 'dog' :
+           r < 0.70 ? 'springboard' : r < 0.76 ? 'sleepCat' :
+           r < 0.82 ? 'movingPipe' : r < 0.88 ? 'fallingIce' :
+           r < 0.94 ? 'sprinkler' : 'doubleTrap';
   }
   const o = { type: type, wx: wx, passed: false };
   if (type === 'pipe')    { o.w = 76; o.h = 114; o.y = GROUND_Y - 114; o.val = 5; }
@@ -1047,6 +1094,9 @@ function spawnObstacle() {
     o.w = 60; o.h = 90; o.y = GROUND_Y - 90; o.val = 12;
     o.subAntenna = { wx: wx + 120, w: 30, h: 120, y: GROUND_Y - 154 };
   }
+  if (type === 'springboard') { o.w = 54; o.h = 18; o.y = GROUND_Y - 18; o.val = 5; }   // батут: супер-подскок
+  if (type === 'sleepCat')    { o.w = 70; o.h = 40; o.y = GROUND_Y - 40; o.val = 8; }    // спящий кот
+  if (type === 'sprinkler')   { o.w = 30; o.h = 96; o.y = GROUND_Y - 96; o.val = 6; o.ph = randS(0, 6.28); }
   Game.obstacles.push(o);
   Game.lastGap = (type === 'gap');
 }
@@ -1075,6 +1125,8 @@ function spawnStarRow() {
   }
 }
 function spawnItem(kind) {
+  // редкая золотая рыбка — дороже трёх звёзд
+  if (kind === 'fish' && gameRng() < 0.12) kind = 'golden';
   Game.items.push({ kind: kind, wx: Game.worldOffset + W + 60, y: GROUND_Y - 70, dead: false });
 }
 
@@ -1310,6 +1362,23 @@ function updateCollisions() {
       addFloat('+' + o.val, sx, o.y - 10, COLORS.accent);
       if (o.type === 'dog') Game.dogsPassed++;
     }
+    // батут: прыгнул сверху — супер-подскок; с боков он не вредит
+    if (o.type === 'springboard') {
+      const overX2 = box.x + box.w > sx + 6 && box.x < sx + o.w - 6;
+      if (overX2 && cat.vy > 0 && !o.bounced &&
+          box.y + box.h > o.y && box.y + box.h < o.y + o.h + 16) {
+        o.bounced = true;
+        o.pushT = 0.35;                       // проседает после подскока
+        cat.vy = -880; cat.jumps = 1; cat.holdT = HOLD_MAX;
+        cat.squash = 0.14; cat.bounce = 0.18;
+        Game.score += 10 * mult;
+        addFloat('+10 супер-прыжок!', sx + o.w / 2, o.y - 24, COLORS.accent);
+        SFX.double();
+        if (Math.random() < 0.35) SFX.meow();
+        burst(sx + o.w / 2, o.y, '#A8D8EA', 8, 160, 'spark');
+      }
+      continue;
+    }
     // удар сверху по врагам
     if ((o.type === 'dog' || o.type === 'pigeon') && !o.dead) {
       const overX = box.x + box.w > sx + 6 && box.x < sx + o.w - 6;
@@ -1327,6 +1396,21 @@ function updateCollisions() {
         SFX.star();
         burst(sx + o.w / 2, o.y, '#FFE66D', 12, 200, 'spark');
         addFloat('+15', sx + o.w / 2, o.y - 20, COLORS.accent);
+        continue;
+      }
+    }
+    // спящий кот: наступил сверху — проснулся (+8) и убежал; задеть сбоку — всё равно что труба
+    if (o.type === 'sleepCat' && !o.dead) {
+      const overX3 = box.x + box.w > sx + 6 && box.x < sx + o.w - 6;
+      const fromAbove3 = box.y + box.h < oy + o.h * 0.6 && cat.vy > 0;
+      if (overX3 && fromAbove3) {
+        o.dead = true; o.passed = true;
+        Game.obstaclesPassed++;
+        Game.score += 8 * mult;
+        cat.vy = -300;
+        SFX.purr(); SFX.yowl();
+        burst(sx + o.w / 2, o.y + 10, '#FFE66D', 8, 120);
+        addFloat('Мряу! +8', sx + o.w / 2, o.y - 20, COLORS.accent);
         continue;
       }
     }
@@ -1408,6 +1492,19 @@ function updateCollisions() {
         }
         SFX.star();
         burst(sx, it.y, COLORS.fish, 6, 120);
+      } else if (it.kind === 'golden') {
+        // золотая рыбка: жизнь в нору или три звезды в карман + 30 очков
+        Game.fishSeen++;
+        if (Game.lives < CAT_LIVES) {
+          Game.lives++;
+          addFloat('Золотая! ❤️ +1', sx, it.y - 18, '#FFD700');
+        } else {
+          Game.stars += 3;
+          addFloat('Золотая! ⭐ +3', sx, it.y - 18, '#FFD700');
+        }
+        Game.score += 30 * mult;
+        SFX.purr(); SFX.star();
+        burst(sx, it.y, '#FFD700', 10, 160, 'star');
       } else if (it.kind === 'ball') {
         Game.shieldTime = SHIELD_TIME;
         SFX.shield();
@@ -1790,6 +1887,34 @@ function drawGround(pal) {
     cur = b;
   }
   if (cur < W) ctx.fillRect(cur, GROUND_Y + 3, W - cur, 6);
+  // лужи на крыше: видны в дождь, гуще в ливень; мерцают от капель
+  if (Game.rainA > 0.2) {
+    ctx.save();
+    ctx.globalAlpha = Math.min(0.5, Game.rainA * 0.28);
+    const step = 90;
+    const dens = Game.downpourT > 0 ? 0.75 : 0.42;
+    const idx0 = Math.floor(Game.worldOffset / step);
+    const off = Game.worldOffset - idx0 * step;
+    for (let k = -1; k <= Math.ceil(W / step) + 1; k++) {
+      const h1 = hash1((idx0 + k) * 57.3 + 3.7);
+      if (h1 > dens) continue;
+      const pw = 24 + hash1((idx0 + k) * 13.1) * 20;
+      const px = k * step - off + hash1((idx0 + k) * 7.7) * 30;
+      // в щель лужа не льётся
+      let inCut = false;
+      for (let i = 0; i < cuts.length; i++) {
+        if (px + pw > cuts[i][0] && px < cuts[i][1]) { inCut = true; break; }
+      }
+      if (inCut) continue;
+      ctx.fillStyle = '#A8D8EA';
+      ctx.beginPath(); ctx.ellipse(px, GROUND_Y + 7, pw / 2, 3, 0, 0, 6.283); ctx.fill();
+      const sh = 0.4 + 0.6 * Math.abs(Math.sin(tGlobal * 2 + (idx0 + k)));
+      ctx.globalAlpha = Math.min(0.45, Game.rainA * 0.22) * sh;
+      ctx.fillStyle = '#FFFFFF';
+      ctx.beginPath(); ctx.ellipse(px, GROUND_Y + 7, pw / 4, 1.4, 0, 0, 6.283); ctx.fill();
+    }
+    ctx.restore();
+  }
 }
 function currentSkin() {
   for (let i = 0; i < SKINS.length; i++) if (SKINS[i].id === Save.selected) return SKINS[i];
@@ -2470,6 +2595,55 @@ function drawObstacles() {
       ctx.fillStyle = dDark;
       roundRectPath(ctx, sx + 8, y + o.h - 10, 12, 10, 4); ctx.fill();
       roundRectPath(ctx, sx + o.w - 20, y + o.h - 10, 12, 10, 4); ctx.fill();
+    } else if (o.type === 'springboard') {
+      // батут: ножки + синяя чаша, после подскока проседает
+      const push = o.pushT > 0 ? Math.max(0, Math.sin((0.35 - o.pushT) * 14)) * -5 : 0;
+      ctx.fillStyle = '#57575F';
+      ctx.fillRect(sx + 4, o.y + 6, 4, GROUND_Y - o.y - 6);
+      ctx.fillRect(sx + o.w - 8, o.y + 6, 4, GROUND_Y - o.y - 6);
+      ctx.fillStyle = '#A8D8EA';
+      roundRectPath(ctx, sx, o.y + push, o.w, 9, 4); ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath(); ctx.moveTo(sx + 6, o.y + push + 2); ctx.lineTo(sx + o.w - 6, o.y + push + 2); ctx.stroke();
+    } else if (o.type === 'sleepCat') {
+      // спящий клубочком: тело-овал, голова, ушко, хвост и «Z» над головой
+      const br = Math.sin(tGlobal * 2 + o.wx) * 1.2;
+      const cBody = '#8A7552', cDark = '#5C5140';
+      ctx.fillStyle = 'rgba(0,0,0,0.18)';
+      ctx.beginPath(); ctx.ellipse(sx + o.w / 2, GROUND_Y + 8, o.w / 2, 5, 0, 0, 6.283); ctx.fill();
+      ctx.fillStyle = cBody; ctx.strokeStyle = cDark; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.ellipse(sx + o.w / 2, o.y + o.h - 12 + br * 0.5, 24, 12, 0, 0, 6.283); ctx.fill(); ctx.stroke();
+      ctx.beginPath(); ctx.arc(sx + o.w - 16, o.y + 16 + br, 10, 0, 6.283); ctx.fill(); ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(sx + o.w - 22, o.y + 8); ctx.lineTo(sx + o.w - 18, o.y - 2); ctx.lineTo(sx + o.w - 12, o.y + 7);
+      ctx.closePath(); ctx.fill(); ctx.stroke();
+      ctx.strokeStyle = cDark; ctx.lineWidth = 4; ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(sx + 10, o.y + o.h - 8); ctx.quadraticCurveTo(sx - 2, o.y + o.h - 14, sx + 4, o.y + o.h - 20);
+      ctx.stroke();
+      ctx.save();
+      ctx.fillStyle = 'rgba(255,248,231,0.75)';
+      ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'left';
+      const zph = (tGlobal * 0.8 + o.wx) % 2;
+      ctx.fillText('Z', sx + o.w - 12 + zph * 6, o.y - 4 - zph * 8);
+      ctx.font = 'bold 9px sans-serif';
+      ctx.fillText('z', sx + o.w - 4 + zph * 6, o.y - 12 - zph * 8);
+      ctx.restore();
+    } else if (o.type === 'sprinkler') {
+      // колонна-спринклер с двумя струями, качающимися на ветру
+      ctx.fillStyle = '#5B6B8C';
+      roundRectPath(ctx, sx + o.w / 2 - 4, o.y + 6, 8, o.h, 3); ctx.fill();
+      ctx.fillStyle = '#7A8BAC';
+      ctx.beginPath(); ctx.arc(sx + o.w / 2, o.y + 6, 8, 0, 6.283); ctx.fill();
+      ctx.strokeStyle = 'rgba(170,210,245,0.6)'; ctx.lineWidth = 1.2; ctx.lineCap = 'round';
+      const sw2 = Math.sin(tGlobal * 3 + o.ph) * 5;
+      for (let s2 = -1; s2 <= 1; s2 += 2) {
+        ctx.beginPath();
+        ctx.moveTo(sx + o.w / 2, o.y + 4);
+        ctx.quadraticCurveTo(sx + o.w / 2 + s2 * 24 + sw2, o.y - 12, sx + o.w / 2 + s2 * 42 + sw2 * 2, o.y + 18);
+        ctx.stroke();
+      }
     }
   }
 }
@@ -2513,21 +2687,22 @@ function drawItems() {
         ctx.lineWidth = 1;
         ctx.stroke();
       }
-    } else if (it.kind === 'fish') {
+    } else if (it.kind === 'fish' || it.kind === 'golden') {
+      const golden = it.kind === 'golden';
       // машущий хвост
       const tail = Math.sin(cat.animT * 8 + it.wx) * 3;
       // тень
       ctx.fillStyle = 'rgba(0,0,0,0.12)';
       ctx.beginPath(); ctx.ellipse(sx, y + 12, 14, 3, 0, 0, 6.283); ctx.fill();
       // хвост
-      ctx.fillStyle = '#88C4DA';
+      ctx.fillStyle = golden ? '#E3B400' : '#88C4DA';
       ctx.beginPath();
       ctx.moveTo(sx + 8, y);
       ctx.lineTo(sx + 15 + tail, y - 7);
       ctx.lineTo(sx + 15 + tail, y + 7);
       ctx.closePath(); ctx.fill();
       // тело
-      ctx.fillStyle = COLORS.fish;
+      ctx.fillStyle = golden ? '#FFD700' : COLORS.fish;
       ctx.beginPath(); ctx.ellipse(sx - 3, y, 11, 7, 0, 0, 6.283); ctx.fill();
       // блик на теле
       ctx.fillStyle = 'rgba(255,255,255,0.45)';
@@ -2545,6 +2720,17 @@ function drawItems() {
         ctx.lineWidth = 1;
         ctx.beginPath(); ctx.arc(sx - 10, y - 10 - bubblePh * 15, 2, 0, 6.283); ctx.stroke();
         ctx.globalAlpha = 1;
+      }
+      // золотая: искры-блеск
+      if (golden) {
+        ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+        ctx.lineWidth = 1.4;
+        ctx.lineCap = 'round';
+        const sp = 1 + Math.sin(cat.animT * 6 + it.wx) * 0.3;
+        ctx.beginPath();
+        ctx.moveTo(sx - 9 * sp, y); ctx.lineTo(sx + 3 * sp, y);
+        ctx.moveTo(sx - 3, y - 6 * sp); ctx.lineTo(sx - 3, y + 6 * sp);
+        ctx.stroke();
       }
     } else if (it.kind === 'ball') {
       const rot = cat.animT * 2 + it.wx * 0.01;
@@ -3269,6 +3455,8 @@ function update(dt) {
   else if (Game._palPhase === 2) { rT = 0; wT = 0; }
   else { rT = 0.15; wT = 1; }
   if (Game.blizzardT > 0) wT = Math.max(wT, 1);   // в метель — шквал
+  if (Game.downpourT > 0) rT = Math.max(rT, 1.6); // ливень гуще ночного дождя
+  if (Game.gustT > 0) wT = Math.max(wT, 1.5);     // в порыв — сильнее обычного
   const wk = 1 - Math.exp(-dt * 0.35);
   Game.rainA += (rT - Game.rainA) * wk;
   Game.windA += (wT - Game.windA) * wk;
@@ -3338,7 +3526,8 @@ function update(dt) {
     if (o.moving) {
       o.y = o.baseY + Math.sin(cat.animT * 2 + o.ph) * o.amp;
     }
-    if (o.jig > 0) o.jig -= dt * 2.5;   // дрожь трубы после «на волосок»
+    if (o.jig > 0) o.jig -= dt * 2.5;
+    if (o.pushT > 0) o.pushT -= dt;        // проседание батута после подскока   // дрожь трубы после «на волосок»
     if (o.type === 'fallingIce' && !o.started) {
       const sx = screenX(o.wx);
       if (sx < W - 40) o.started = true;
@@ -3356,6 +3545,8 @@ function update(dt) {
   if (Game.currentEvent) {
     Game.currentEventT -= dt;
     if (Game.currentEventK === 'blizzard') Game.blizzardT = Game.currentEventT;
+    if (Game.currentEventK === 'downpour') Game.downpourT = Game.currentEventT;
+    if (Game.currentEventK === 'gust') Game.gustT = Game.currentEventT;
     if (Game.currentEventT <= 0) {
       if (Game.currentEvent.cleanup) Game.currentEvent.cleanup();
       Game.currentEvent = null;
