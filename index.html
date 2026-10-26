@@ -190,7 +190,7 @@ h2 { font-size:clamp(1.2rem,3vw,1.8rem); }
     </button>
   </div>
   <div id="mileBar"></div>
-  <div id="hint">Пробел — прыжок (держи дольше — выше) · S / ↓ — подкат</div>
+  <div id="hint">Пробел — прыжок (держи дольше — выше) · S / ↓ — подкат · F — полный экран</div>
   <div class="screen show" id="screenMenu">
     <h1>Мурлык и Звёздные Крыши</h1>
     <p class="sub">Рыжий кот Мурлык прыгает по крышам ночного города, собирает звёзды<br>и зажигает ими небо, пока не наступит рассвет.</p>
@@ -200,7 +200,7 @@ h2 { font-size:clamp(1.2rem,3vw,1.8rem); }
       <button class="btn ghost" id="btnSkins">Скины</button>
     </div>
     <p class="stat">Рекорд: <b id="menuBest">0</b> · Сегодня: <b id="menuDaily">—</b><span id="menuStreak"></span></p>
-    <p class="keysHint">Пробел / W / ↑ / клик / тап — прыжок · S / ↓ / свайп вниз — подкат · Esc / P — пауза</p>
+    <p class="keysHint">Пробел / W / ↑ / клик / тап — прыжок · S / ↓ / свайп вниз — подкат · Esc / P — пауза · F — полный экран</p>
   </div>
   <div class="screen" id="screenSkins">
     <h2>Скины Мурлыка</h2>
@@ -752,8 +752,8 @@ window.addEventListener('keydown', function(e) {
     e.preventDefault();
     gestureStart();
     inputPause();
-  } else if (k === 'f' || k === 'F' || k === 'р' || k === 'Р') {
-    // F — полный экран (R на русской раскладке — та же клавиша)
+  } else if (k === 'f' || k === 'F' || k === 'а' || k === 'А') {
+    // F — полный экран (на русской раскладке та же клавиша даёт «а»)
     e.preventDefault();
     toggleFullscreen();
   }
@@ -3270,6 +3270,10 @@ elBtnMute.addEventListener('click', function(e) {
   writeSave();
   hudUpdate();
   refreshMenu();
+});
+$('btnFull').addEventListener('click', function(e) {
+  e.stopPropagation();
+  toggleFullscreen();
 });
 $('btnShare').addEventListener('click', function() {
   const btn = $('btnShare');
