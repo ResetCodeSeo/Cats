@@ -38,7 +38,7 @@ canvas { width:100%; height:100%; display:block; touch-action:none; }
 }
 #hud b { color:#FFE66D; }
 #hudLives { letter-spacing:2px; line-height:1; }
-#hudLives svg { display:block; }
+#hudLives svg { display:inline-block; vertical-align:middle; }
 #hudLives.pulse { animation:heartPulse .55s ease; }
 @keyframes heartPulse { 35% { transform:scale(1.28); filter:drop-shadow(0 0 6px rgba(228,105,90,.85)); } }
 #hudCombo {
@@ -54,6 +54,19 @@ canvas { width:100%; height:100%; display:block; touch-action:none; }
 }
 .hbtn:hover { background:rgba(255,248,231,.25); }
 .hbtn.muted { opacity:0.5; }
+.hbtn.active { background:rgba(255,230,109,.9); color:#0B1026; border-color:#FFE66D; }
+/* Нативный полный экран: растягиваем сцену на весь экран */
+#stage:fullscreen { width:100vw; height:100vh; aspect-ratio:auto; }
+#stage:-webkit-full-screen { width:100vw; height:100vh; aspect-ratio:auto; }
+#stage:fullscreen canvas,
+#stage:-webkit-full-screen canvas { object-fit:contain; }
+/* «Псевдо-полный» для iOS: сцена на весь экран, канвас вписан без искажения */
+body.fakeFull #stage { width:100vw; height:100dvh; aspect-ratio:auto; }
+body.fakeFull canvas { object-fit:contain; }
+/* Крупнее кнопки на сенсорных экранах */
+@media (pointer: coarse){
+  .hbtn { padding:8px 14px; font-size:1.15em; }
+}
 /* Screens */
 .screen {
   position:absolute; inset:0;
@@ -774,16 +787,30 @@ document.addEventListener('visibilitychange', function() {
     if (Game.state === 'playing') pauseGame();
   }
 });
-// полный экран: кнопка в HUD и клавиша F; canvas пересчитывается при смене режима
+// полный экран: кнопка в HUD и клавиша F; на iOS нет API — «псевдо-полный» через CSS
+function fsActive() { return document.fullscreenElement || document.webkitFullscreenElement; }
+function fsFakeOn() { return document.body.classList.contains('fakeFull'); }
+function fsShowFake() { document.body.classList.add('fakeFull'); setupCanvas(); }
 function toggleFullscreen() {
+  if (fsActive() || fsFakeOn()) {
+    if (document.exitFullscreen) { document.exitFullscreen().catch(function() {}); }
+    else if (document.webkitExitFullscreen) { document.webkitExitFullscreen(); }
+    if (fsFakeOn()) { document.body.classList.remove('fakeFull'); setupCanvas(); }
+    return;
+  }
   const el = document.documentElement;
-  if (document.fullscreenElement) {
-    document.exitFullscreen();
-  } else if (el.requestFullscreen) {
-    el.requestFullscreen().catch(function() {});
+  const fs = el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen;
+  if (fs) {
+    try {
+      const p = fs.call(el);
+      if (p && p.catch) { p.catch(fsShowFake); }   // iOS: обещание отказывает — включаем псевдо-режим
+    } catch (e) { fsShowFake(); }
+  } else {
+    fsShowFake();
   }
 }
-document.addEventListener('fullscreenchange', setupCanvas);
+document.addEventListener('fullscreenchange', function() { setupCanvas(); });
+document.addEventListener('webkitfullscreenchange', function() { setupCanvas(); });
 canvas.addEventListener('pointerdown', function(e) {
   e.preventDefault();
   gestureStart();
