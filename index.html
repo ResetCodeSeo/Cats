@@ -95,6 +95,7 @@ h2 { font-size:clamp(1.2rem,3vw,1.8rem); }
   border:1px solid rgba(255,248,231,.35);
 }
 .btn.ghost:hover { background:rgba(255,248,231,.22); }
+.btn.ghost.on { outline:2px solid #FFE66D; background:rgba(255,230,109,.14); }
 .row { display:flex; gap:12px; flex-wrap:wrap; justify-content:center; }
 .stat { font-size:clamp(1rem,2vw,1.2rem); }
 .stat b { color:#FFE66D; }
@@ -185,6 +186,7 @@ h2 { font-size:clamp(1.2rem,3vw,1.8rem); }
   <div id="hud">
     <span>⭐ <b id="hudStars">0</b></span>
     <span>Очки: <b id="hudScore">0</b></span>
+    <span>🐾 <b id="hudDist">0</b> м</span>
     <span id="hudBest" style="display:none"></span>
     <span id="hudGhost" style="display:none">👻 0</span>
     <span id="hudCombo"></span>
@@ -211,6 +213,15 @@ h2 { font-size:clamp(1.2rem,3vw,1.8rem); }
       <button class="btn" id="btnPlay">Играть</button>
       <button class="btn ghost" id="btnDaily">Забег дня 🗓</button>
       <button class="btn ghost" id="btnSkins">Скины</button>
+    </div>
+    <div class="row" id="diffRow">
+      <button class="btn ghost diffBtn" data-diff="easy">Лёгкий · 9♥</button>
+      <button class="btn ghost diffBtn" data-diff="normal">Обычный · 5♥</button>
+      <button class="btn ghost diffBtn" data-diff="hard">Сложный · 3♥</button>
+    </div>
+    <div class="row">
+      <button class="btn ghost" id="btnGhostToggle">👻 Призрак: вкл</button>
+      <button class="btn ghost" id="btnPixelToggle">🎨 Пиксель: выкл (X)</button>
     </div>
     <p class="stat">Рекорд: <b id="menuBest">0</b> · Сегодня: <b id="menuDaily">—</b><span id="menuStreak"></span></p>
     <p class="keysHint">Пробел / W / ↑ / клик / тап — прыжок · S / ↓ / свайп вниз — подкат · Esc / P — пауза · F — полный экран</p>
@@ -239,6 +250,7 @@ h2 { font-size:clamp(1.2rem,3vw,1.8rem); }
     <p class="stat" id="overNext" style="display:none"></p>
     <p class="stat">Звёзд собрано: <b id="overStars">0</b></p>
     <p class="stat">Пыли получено: <b id="overDust">0</b></p>
+    <p class="stat" id="overStats"></p>
     <div class="row">
       <button class="btn" id="btnAgain">Ещё раз</button>
       <button class="btn ghost" id="btnShare" style="display:none">📋 Поделиться</button>
@@ -256,14 +268,20 @@ const JUMP_VY = -810;
 const DOUBLE_JUMP_VY = -680;
 const BASE_SPEED = 320;
 const MAX_SPEED = 600;
-const SPEED_STEP = 5;         // +5 px/s за каждые 1000 очков
+const SPEED_STEP = 4;         // +4 px/s за каждые 500 очков (ступеньки резче)
 const CAT_X = 180;            // левый край кота по X
 const GROUND_Y = 380;         // уровень крыши (нижняя кромка кота)
 const CAT_W = 56, CAT_H = 66; // хитбокс стоя
 const SLIDE_W = 82, SLIDE_H = 40;
 const HIT_SHRINK = 0.1;       // с каждой стороны отступ 10% (=20% суммарно)
 const INVULN_TIME = 1.0;
-const CAT_LIVES = 9;            // у кота 9 жизней
+const CAT_LIVES = 9;            // верх жизни для «лёгкого» режима
+// режимы сложности: жизни / скорость мира / расстояния спавна
+const DIFF = {
+  easy:   { lives: 9, speedK: 0.85, gapK: 1.30 },
+  normal: { lives: 5, speedK: 1.00, gapK: 1.00 },
+  hard:   { lives: 3, speedK: 1.15, gapK: 0.78 }
+};
 const SHIELD_TIME = 5.0;
 const SLIDE_TIME = 0.4;
 const SLIDE_CD = 0.2;
@@ -283,6 +301,8 @@ const JUMP_BUFFER = 0.10;     // буфер: нажатие за 100 мс до �
 // «на волосок»
 const GRAZE_DIST = 13;        // px — расстояние, при котором считаем «впритирку»
 const GRAZE_PTS = 20;         // бонус за graze
+const COMBO_TIME = 6;         // сек: без звезды за это время — комбо сгорает
+const FEEDER_SLOW = 0.35;     // слоу-мо множитель мира при появлении человека с кормом
 const COLORS = {
   cat:'#F5A623', muzzle:'#FFF8E7', eyes:'#2B8A3E',
   star:'#FFE66D', fish:'#A8D8EA', ball:'#E85D75',
@@ -312,7 +332,7 @@ const SKINS = [
 const PERKS = [
   { id: 'shield',  name: 'Крепкий',    desc: 'Старт с 1 щитом',             cost: 100 },
   { id: 'fisher',  name: 'Рыбак',      desc: 'Рыбка лечит 2 жизни',         cost: 120 },
-  { id: 'higher',  name: 'Пружина',    desc: 'Двойной прыжок +10%',         cost: 150 },
+  { id: 'higher',  name: 'Пружина',    desc: 'Двойной прыжок +25%',         cost: 150 },
   { id: 'slower',  name: 'Тише едешь', desc: 'Скорость растёт медленнее',   cost: 80 }
 ];
 
@@ -416,7 +436,10 @@ const Save = {
   hintSeen: false,       // хинт управления показан и скрыт
   dayKey: '',            // дата последнего забега дня
   dayBest: 0,            // рекорд дня
-  dayStreak: 0           // серия дней в «забеге дня»
+  dayStreak: 0,          // серия дней в «забеге дня»
+  difficulty: 'normal',  // 'easy' | 'normal' | 'hard'
+  pixel: false,          // пиксельный стиль (вкл. кнопкой / клавишей X)
+  ghostOn: true          // показывать призрак забега дня
 };
 function loadSave() {
   try {
@@ -427,7 +450,9 @@ function loadSave() {
       Save.best = Number(d.best) || 0;
       Save.dust = Number(d.dust) || 0;
       Save.skins = Array.isArray(d.skins) && d.skins.length ? d.skins : ['orange'];
-      if (Save.skins.indexOf('orange') < 0) Save.skins.push('orange');
+      // дедупликация: без повторов, «оранжевый» всегда есть
+      Save.skins = Save.skins.filter(function(s, i) { return Save.skins.indexOf(s) === i; });
+      if (Save.skins.indexOf('orange') < 0) Save.skins.unshift('orange');
       Save.selected = (d.selected && Save.skins.indexOf(d.selected) >= 0) ? d.selected : 'orange';
       Save.muted = !!d.muted;
       Save.perks = Array.isArray(d.perks) ? d.perks : [];
@@ -436,6 +461,9 @@ function loadSave() {
       Save.dayKey = typeof d.dayKey === 'string' ? d.dayKey : '';
       Save.dayBest = Number(d.dayBest) || 0;
       Save.dayStreak = Number(d.dayStreak) || 0;
+      if (d.difficulty === 'easy' || d.difficulty === 'hard') Save.difficulty = d.difficulty;
+      Save.pixel = !!d.pixel;
+      if (d.ghostOn === false) Save.ghostOn = false;
     }
   } catch (e) { /* приватный режим / битый JSON — игнорируем */ }
 }
@@ -769,6 +797,20 @@ window.addEventListener('keydown', function(e) {
     // F — полный экран (на русской раскладке та же клавиша даёт «а»)
     e.preventDefault();
     toggleFullscreen();
+  } else if (k === 'g' || k === 'G' || k === 'п' || k === 'П') {
+    // G — призрак забега дня (на русской раскладке та же клавиша даёт «п»)
+    e.preventDefault();
+    gestureStart();
+    Save.ghostOn = !Save.ghostOn;
+    if (!Save.ghostOn) GHOST.on = false;
+    writeSave();
+    refreshMenu();
+    hudUpdate();
+  } else if (k === 'x' || k === 'X' || k === 'ч' || k === 'Ч') {
+    // X — пиксельный стиль (на русской раскладке та же клавиша даёт «ч»)
+    e.preventDefault();
+    gestureStart();
+    setPixelMode(!Save.pixel);
   }
 }, { passive: false });
 window.addEventListener('keyup', function(e) {
@@ -811,14 +853,24 @@ function toggleFullscreen() {
 }
 document.addEventListener('fullscreenchange', function() { setupCanvas(); });
 document.addEventListener('webkitfullscreenchange', function() { setupCanvas(); });
+// pointer-* — только мышь; палец обрабатывается touch-* (иначе двойной прыжок с touchscreen)
 canvas.addEventListener('pointerdown', function(e) {
+  if (e.pointerType !== 'mouse') return;
   e.preventDefault();
   gestureStart();
   jumpHeld = true;
   inputJump();
 });
-canvas.addEventListener('pointerup', function() { jumpHeld = false; });
-canvas.addEventListener('pointercancel', function() { jumpHeld = false; });
+canvas.addEventListener('pointerup', function(e) {
+  if (e.pointerType !== 'mouse') return;
+  jumpHeld = false;
+});
+canvas.addEventListener('pointercancel', function(e) {
+  if (e.pointerType !== 'mouse') return;
+  jumpHeld = false;
+});
+// палец: прыжок на касании; пока палец на экране — холд (высокий прыжок);
+// отпустил рано — низкий прыжок (как короткое нажатие клавиши на десктопе)
 canvas.addEventListener('touchstart', function(e) {
   e.preventDefault();
   touchActive = true;
@@ -827,6 +879,10 @@ canvas.addEventListener('touchstart', function(e) {
   const t = e.changedTouches[0];
   touchStartX = t.clientX; touchStartY = t.clientY;
   gestureStart();
+  if (Game.state === 'menu' || Game.state === 'gameover') {
+    startRun(Game.state === 'gameover' ? Game.daily : false); return;
+  }
+  inputJump();
 }, { passive: false });
 canvas.addEventListener('touchmove', function(e) {
   e.preventDefault();
@@ -839,11 +895,12 @@ canvas.addEventListener('touchend', function(e) {
   e.preventDefault();
   if (!touchActive) return;
   touchActive = false;
-  if (!touchSlid) {
-    // тап = «полный» прыжок: для тапа считаем кнопку зажатой (холд-прыжок на месте)
-    jumpHeld = true;
-    inputJump();
-  }
+  // отпускание снимает холд: короткому тапу достаётся низкий прыжок
+  jumpHeld = false;
+}, { passive: false });
+canvas.addEventListener('touchcancel', function(e) {
+  touchActive = false;
+  jumpHeld = false;
 }, { passive: false });
 
 /* ===== §6 Состояние игры ===== */
@@ -856,6 +913,9 @@ const Game = {
   stars: 0,           // звёзд за забег
   streak: 0,          // подряд без столкновений
   combo: 1,
+  comboT: 0,            // таймер комбо: без звезды COMBO_TIME секунд — сброс
+  maxCombo: 0, grazeCount: 0, runT: 0,  // статистика финального экрана
+  slowT: 0,             // слоу-мо: человек с кормом въезжает — мир в замедлении
   speed: BASE_SPEED,
   worldOffset: 0,     // сколько px мир проскочил
   distance: 0,
@@ -886,12 +946,18 @@ const Game = {
   // «на волосок»: серия и таймер; метель; шлейф скина
   grazeStreak: 0, grazeT: 0, blizzardT: 0, trailT: 0,
   downpourT: 0, gustT: 0,   // события: ливень и порыв ветра
+  // сложность и статистика забега
+  maxLives: CAT_LIVES, diffK: 1, gapK: 1,
   // кэш палитры
   _palCache: null, _palPhase: -1, _palT: 0
 };
 function resetRun() {
-  Game.score = 0; Game.lives = CAT_LIVES; Game.stars = 0;
-  Game.streak = 0; Game.combo = 1;
+  const dif = DIFF[Save.difficulty] || DIFF.normal;
+  Game.maxLives = dif.lives; Game.diffK = dif.speedK; Game.gapK = dif.gapK;
+  Game.score = 0; Game.lives = dif.lives; Game.stars = 0;
+  Game.streak = 0; Game.combo = 1; Game.comboT = 0;
+  Game.maxCombo = 0; Game.grazeCount = 0; Game.runT = 0;
+  Game.slowT = 0;
   Game.speed = BASE_SPEED;
   Game.worldOffset = 0; Game.distance = 0;
   Game.obstaclesPassed = 0; Game.milestone = 0;
@@ -914,11 +980,11 @@ function resetRun() {
   cat.squash = 0; cat.bounce = 0; cat.flip = 0; cat.flipActive = false;
   cat.pose = 'run';
   cat.attackT = 0; cat.boostT = 0; cat.attackTarget = null;
-  cat.tailA = 0; cat.tailV = 0; cat.clawG = 0;
+  cat.tailA = 0; cat.tailV = 0; cat.clawG = 0; cat.lickT = 0;
   cat.doubleJumpBonus = 1;
   // перки
   if (Save.activePerk === 'shield') Game.shieldTime = 5;
-  if (Save.activePerk === 'higher') cat.doubleJumpBonus = 1.1; else cat.doubleJumpBonus = 1;
+  if (Save.activePerk === 'higher') cat.doubleJumpBonus = 1.25; else cat.doubleJumpBonus = 1;
   // счётчики целей
   Game.dogsPassed = 0; Game.missedFish = 0; Game.fishSeen = 0; Game.riskStars = 0;
   // события
@@ -930,7 +996,7 @@ function resetRun() {
   // «на волосок», метель и шлейф
   Game.grazeStreak = 0; Game.grazeT = 0; Game.blizzardT = 0; Game.trailT = 0;
   // призрак забега дня
-  if (Game.daily) ghostReset(); else GHOST.on = false;
+  if (Game.daily && Save.ghostOn) ghostReset(); else GHOST.on = false;
   // мини-цели
   Game.goals = pickGoals();
   Game.goalsDone = [false, false, false];
@@ -938,13 +1004,21 @@ function resetRun() {
 
 // пул мини-целей: случайные 3 из 6 на забег
 const GOAL_POOL = [
-  { id: 'stars',   txt: 'Собери 20 звёзд',           check: function() { return Game.stars >= 20; },                    reward: 30 },
+  { id: 'stars',   txt: 'Собери 40 звёзд',           check: function() { return Game.stars >= 40; },                    reward: 30 },
   { id: 'combo',   txt: 'Достигни комбо ×3',         check: function() { return Game.combo >= 3; },                    reward: 40 },
   { id: 'dogs',    txt: 'Проскочи 5 собак',          check: function() { return Game.dogsPassed >= 5; },               reward: 50 },
   { id: 'nofish',  txt: 'Собери 3 рыбки подряд',       check: function() { return Game.missedFish === 0 && Game.fishSeen >= 3; }, reward: 80 },
   { id: 'risk',    txt: 'Собери 5 рискованных звёзд', check: function() { return Game.riskStars >= 5; },               reward: 60 },
-  { id: 'dist',    txt: 'Пробеги 3000 метров',       check: function() { return Game.distance >= 3000; },              reward: 50 }
+  { id: 'dist',    txt: 'Пробеги 2000 метров',       check: function() { return Game.distance >= 20000; },             reward: 50 }
 ];
+// испуг: удар по голубю из стаи — остальные драпаются вверх и исчезают
+function scatterPigeons(src) {
+  for (let i = 0; i < Game.obstacles.length; i++) {
+    const p = Game.obstacles[i];
+    if (p.type !== 'pigeon' || !p.flock || p === src || p.dead || p.fleeT > 0) continue;
+    p.fleeT = 1;
+  }
+}
 function pickGoals() {
   const pool = GOAL_POOL.slice();
   const out = [];
@@ -975,7 +1049,7 @@ const EVENTS = {
         Game.obstacles.push({
           type: 'pigeon', wx: Game.worldOffset + W + 100 + i * 180,
           w: 64, h: 51, y: GROUND_Y - 89, ph: randS(0, 6.28),
-          val: 8, passed: false
+          val: 8, passed: false, flock: true, fleeT: 0
         });
       }
     }
@@ -1077,20 +1151,35 @@ function spawnObstacle() {
   if (d < 3000) {
     type = r < 0.5 ? 'pipe' : 'antenna';
   } else if (d < 8000) {
-    type = r < 0.26 ? 'pipe' : r < 0.46 ? 'antenna' :
-           r < 0.62 ? 'pigeon' : r < 0.76 ? 'gap' : r < 0.86 ? 'dog' :
-           r < 0.94 ? 'springboard' : 'sleepCat';
+    type = r < 0.24 ? 'pipe' : r < 0.42 ? 'antenna' :
+           r < 0.58 ? 'pigeon' : r < 0.72 ? 'gap' :
+           r < 0.79 ? 'springboard' : r < 0.86 ? 'sleepCat' :
+           r < 0.93 ? 'kitten' : 'feeder';
   } else if (d < 15000) {
-    type = r < 0.21 ? 'pipe' : r < 0.39 ? 'antenna' :
-           r < 0.53 ? 'pigeon' : r < 0.66 ? 'gap' : r < 0.76 ? 'dog' :
-           r < 0.83 ? 'springboard' : r < 0.88 ? 'sleepCat' :
-           r < 0.94 ? 'movingPipe' : 'fallingIce';
+    type = r < 0.20 ? 'pipe' : r < 0.37 ? 'antenna' :
+           r < 0.55 ? 'pigeon' : r < 0.66 ? 'gap' :
+           r < 0.73 ? 'springboard' : r < 0.79 ? 'sleepCat' :
+           r < 0.85 ? 'kitten' : r < 0.90 ? 'feeder' :
+           r < 0.95 ? 'movingPipe' : 'fallingIce';
   } else {
     type = r < 0.17 ? 'pipe' : r < 0.32 ? 'antenna' :
-           r < 0.45 ? 'pigeon' : r < 0.55 ? 'gap' : r < 0.64 ? 'dog' :
-           r < 0.70 ? 'springboard' : r < 0.76 ? 'sleepCat' :
-           r < 0.82 ? 'movingPipe' : r < 0.88 ? 'fallingIce' :
+           r < 0.45 ? 'pigeon' : r < 0.58 ? 'gap' :
+           r < 0.65 ? 'springboard' : r < 0.71 ? 'sleepCat' :
+           r < 0.77 ? 'kitten' : r < 0.82 ? 'feeder' :
+           r < 0.86 ? 'movingPipe' : r < 0.90 ? 'fallingIce' :
            r < 0.94 ? 'sprinkler' : 'doubleTrap';
+  }
+  // пул спавна по времени суток: ночью голубей больше, днём лёд тает
+  const ph = Game._palCache ? Game._palCache.phase : 0;
+  if (ph === 0) {
+    // ночь: спринклеры замерли — не мешаются
+    if (type === 'sprinkler') type = 'antenna';
+  } else if (ph === 2) {
+    // рассвет: спящий кот уже не спит — встречает батутом
+    if (type === 'sleepCat') type = 'springboard';
+  } else if (ph === 3) {
+    // день: лёд тает и рассыпается в пыль
+    if (type === 'fallingIce') type = 'pigeon';
   }
   const o = { type: type, wx: wx, passed: false };
   if (type === 'pipe')    { o.w = 76; o.h = 114; o.y = GROUND_Y - 114; o.val = 5; }
@@ -1100,7 +1189,12 @@ function spawnObstacle() {
   if (type === 'gap')     {
     o.gw = randS(60, 140);
     o.val = 10;
-    Game.gaps.push({ wx: wx, w: o.gw, passed: false });
+    // в яме между домами может жить собака: прыгает достать кота
+    const g = { wx: wx, w: o.gw, passed: false, dog: null };
+    if (Game.distance > 1200 && gameRng() < 0.55) {
+      g.dog = { x: wx + o.gw / 2, y: H + 46, vy: 0, jump: false, state: 'wait', fled: false, nipped: false };
+    }
+    Game.gaps.push(g);
   }
   if (type === 'movingPipe') {
     o.w = 60; o.h = 90; o.val = 8;
@@ -1119,11 +1213,26 @@ function spawnObstacle() {
   if (type === 'doubleTrap') {
     // труба + антенна через 120 px как один объект
     o.w = 60; o.h = 90; o.y = GROUND_Y - 90; o.val = 12;
-    o.subAntenna = { wx: wx + 120, w: 30, h: 120, y: GROUND_Y - 154 };
+    o.subAntenna = { wx: wx + 120, w: 30, h: 120, y: GROUND_Y - 154, passed: false };
   }
   if (type === 'springboard') { o.w = 54; o.h = 18; o.y = GROUND_Y - 18; o.val = 5; }   // батут: супер-подскок
   if (type === 'sleepCat')    { o.w = 70; o.h = 40; o.y = GROUND_Y - 40; o.val = 8; }    // спящий кот
   if (type === 'sprinkler')   { o.w = 30; o.h = 96; o.y = GROUND_Y - 96; o.val = 6; o.ph = randS(0, 6.28); }
+  // человек выставил корм: не вредит; миска даёт жизнь/очки
+  if (type === 'feeder') {
+    o.w = 46; o.h = 92; o.y = GROUND_Y - 92; o.val = 0;
+    o.t = -1;                              // таймер включится при въезде в экран
+    o.placed = false;                    // миска выставлена?
+    o.bowlY = GROUND_Y - 46;             // миска в руках
+    o.bowlEaten = false;                 // корм съеден?
+    o.ph = randS(0, 6.28);               // фаза одежды/походки
+  }
+  // котёнок на крыше: не вредит; поглаживается при проходе мимо
+  if (type === 'kitten') {
+    o.w = 36; o.h = 34; o.y = GROUND_Y - 34; o.val = 5;
+    o.t = randS(0, 6.28);                // фаза подпрыгиваний/хвоста
+    o.petted = false;                    // уже поглаживали?
+  }
   Game.obstacles.push(o);
   Game.lastGap = (type === 'gap');
 }
@@ -1172,7 +1281,8 @@ const cat = {
   pose: 'idle',
   animT: 0,
   tailA: 0, tailV: 0,     // пружина хвоста: угол (рад) и скорость (рад/с)
-  clawG: 0                // таймер визуала «вцепился когтями» в воздухе
+  clawG: 0,               // таймер визуала «вцепился когтями» в воздухе
+  lickT: 0                // слизывает корм с миски
 };
 function catBox() {
   let w, h;
@@ -1281,6 +1391,7 @@ function catUpdate(dt) {
   cat.tailV += ((tTgt - cat.tailA) * 42 - cat.tailV * 5.2 + cat.vy * 0.011) * dt;
   cat.tailA += cat.tailV * dt;
   if (cat.clawG > 0) cat.clawG -= dt;
+  if (cat.lickT > 0) cat.lickT -= dt;
   // Когти-спасение: падаем на стену трубы/антенны и держим прыжок — кот отталкивается от стены
   if (!cat.onGround && !cat.falling && cat.vy > 160 && jumpHeld && Game.invuln <= 0) {
     const front = CAT_X + CAT_W;     // передняя кромка кота на экране
@@ -1326,10 +1437,18 @@ function catUpdate(dt) {
     }
     cat.onGround = false; // ушли с крыши
   } else {
-    if (cat.falling) { // вылетели из щели, будучи ниже уровня крыши
-      cat.y = GROUND_Y; cat.vy = 0; cat.onGround = true; cat.jumps = 0; cat.falling = false;
-      catHit();
-      return;
+    if (cat.falling) {
+      // «escape»: кот выскочил из ямы и поднимается выше крыши — не наказываем
+      if (cat.vy < 0 && cat.y < GROUND_Y - 2) {
+        cat.falling = false;
+        Game.score += 10 * (Game.scoreMultiplier || 1);
+        addFloat('Escape из ямы! +10', CAT_X + CAT_W / 2, cat.y - 80, COLORS.accent);
+        SFX.purr();
+      } else {
+        cat.y = GROUND_Y; cat.vy = 0; cat.onGround = true; cat.jumps = 0; cat.falling = false;
+        catHit();
+        return;
+      }
     }
     if (cat.y >= GROUND_Y) {
       if (cat.vy > 0 && !cat.onGround) {
@@ -1379,11 +1498,18 @@ function updateCollisions() {
       if (!o.passed && sx + 0 < CAT_X + CAT_W) {
         o.passed = true; Game.obstaclesPassed++;
         Game.score += o.val * mult; addFloat('+' + o.val, sx, GROUND_Y - 60, COLORS.accent);
+        // собака в яме осталась ни с чем — засчитываем проскок
+        for (let j = 0; j < Game.gaps.length; j++) {
+          const gg = Game.gaps[j];
+          if (gg.wx === o.wx && gg.dog && !gg.dog.fled && !gg.dog.nipped) {
+            gg.dog.nipped = true; Game.dogsPassed++;
+          }
+        }
       }
       continue;
     }
-    if (o.dead) continue;
-    if (!o.passed && sx + o.w < CAT_X) {
+    if (o.dead || o.fleeT > 0) continue;   // испуганный голубь из стаи — уже улетает
+    if (!o.passed && sx + o.w < CAT_X && o.val > 0) {
       o.passed = true; Game.obstaclesPassed++;
       Game.score += o.val * mult;
       addFloat('+' + o.val, sx, o.y - 10, COLORS.accent);
@@ -1406,6 +1532,44 @@ function updateCollisions() {
       }
       continue;
     }
+    // человек с кормом и котёнок: существа добрые; миска — съедобная
+    if (o.type === 'feeder') {
+      // миска: подбежал — слизал корм
+      const bx = sx + 6, bw = 34, bh = 16, byy = GROUND_Y - bh;
+      if (o.placed && !o.bowlEaten &&
+          box.x + box.w > bx && box.x < bx + bw &&
+          box.y + box.h > byy - 6) {
+        o.bowlEaten = true;
+        if (Game.lives < Game.maxLives) {
+          Game.lives++;
+          addFloat('Корм! ❤️ +1', bx + bw / 2, byy - 24, '#FF8C69');
+        } else {
+          Game.score += 12 * mult;
+          addFloat('+12 сытно!', bx + bw / 2, byy - 24, COLORS.accent);
+        }
+        cat.lickT = 0.6;                          // анимация: кот слизал корм
+        SFX.purr(); SFX.star();
+        burst(bx + bw / 2, byy, '#FFE66D', 8, 120, 'spark');
+      }
+      continue;
+    }
+    if (o.type === 'kitten' && !o.dead) {
+      // котёнок не вредит; кот пробегает мимо — «поглаживается», мурчит
+      const midK = sx + o.w / 2;
+      const near = Math.abs((CAT_X + CAT_W / 2) - midK);
+      if (!o.petted && cat.onGround && near < 58) {
+        o.petted = true;
+        Game.score += 5 * mult;
+        cat.bounce = 0.16;                      // кот подпрыгивает от удовольствия
+        SFX.purr();
+        if (Math.random() < 0.4) SFX.meow();
+        addFloat('Мур! +5', midK, o.y - 20, COLORS.accent);
+        burst(midK, o.y, '#FFB6C1', 5, 80);
+      }
+      // котёнок скачет на месте
+      o.y = GROUND_Y - o.h - Math.abs(Math.sin(o.t)) * 10;
+      continue;
+    }
     // удар сверху по врагам
     if ((o.type === 'dog' || o.type === 'pigeon') && !o.dead) {
       const overX = box.x + box.w > sx + 6 && box.x < sx + o.w - 6;
@@ -1420,6 +1584,7 @@ function updateCollisions() {
         Game.score += 15 * mult;
         Game.obstaclesPassed++;
         if (o.type === 'dog') Game.dogsPassed++;
+        if (o.flock) scatterPigeons(o);   // остальные в стае — кто куда
         SFX.star();
         burst(sx + o.w / 2, o.y, '#FFE66D', 12, 200, 'spark');
         addFloat('+15', sx + o.w / 2, o.y - 20, COLORS.accent);
@@ -1441,11 +1606,11 @@ function updateCollisions() {
         continue;
       }
     }
-    // двойная ловушка: антенна рядом с трубой
+    // двойная ловушка: антенна рядом с трубой — passed по собственному флагу, а не по флагу трубы
     if (o.type === 'doubleTrap' && o.subAntenna) {
       const ax = screenX(o.subAntenna.wx);
-      if (!o.passed && ax + o.subAntenna.w < CAT_X) {
-        o.passed = true; Game.obstaclesPassed++;
+      if (!o.subAntenna.passed && ax + o.subAntenna.w < CAT_X) {
+        o.subAntenna.passed = true; Game.obstaclesPassed++;
         Game.score += o.val * mult;
         addFloat('+' + o.val, sx, o.y - 10, COLORS.accent);
       }
@@ -1455,19 +1620,25 @@ function updateCollisions() {
       }
     }
     if (Game.invuln > 0) continue;
-    // хитбокc с небольшим отступом; у антенны смещается вместе с качанием
+    // хитбокc с небольшим отступом; у антенны смещается вместе с качанием,
+    // у спринклера — только видимая колонка, не вся ширина струй
     let hx = sx + 4;
+    let hw = o.w - 8;
+    if (o.type === 'sprinkler') { hx = sx + o.w / 2 - 6; hw = 12; }
     if (o.type === 'antenna') hx += antennaSway(o) * 0.5;
-    if (aabb(box.x, box.y, box.w, box.h, hx, oy + 4, o.w - 8, o.h - 8)) {
+    if (aabb(box.x, box.y, box.w, box.h, hx, oy + 4, hw, o.h - 8)) {
       catHit();
+      // от удара и крика вся стая взлетает
+      if (o.flock) scatterPigeons(o);
     } else if (!o.grazed) {
       // «на волосок»: не задела, но прошла впритирку — бонус, искры и дрожь трубы
-      const gx = Math.max(hx - (box.x + box.w), box.x - (hx + o.w - 8), 0);
+      const gx = Math.max(hx - (box.x + box.w), box.x - (hx + hw), 0);
       const gy = Math.max((oy + 4) - (box.y + box.h), box.y - ((oy + 4) + o.h - 8), 0);
       if (gx * gx + gy * gy < GRAZE_DIST * GRAZE_DIST) {
         o.grazed = true;
         // серия «на волосок»: чем длиннее, тем жирнее бонус (до ×5); в метель — ещё ×2
         Game.grazeStreak++;
+        Game.grazeCount++;
         Game.grazeT = 4;
         const k = Math.min(5, Game.grazeStreak);
         const bliz = Game.blizzardT > 0 ? 2 : 1;
@@ -1479,6 +1650,31 @@ function updateCollisions() {
         SFX.graze();
         if (o.type === 'pipe' || o.type === 'movingPipe' || o.type === 'doubleTrap') o.jig = 1;
       }
+    }
+  }
+  // собаки в яме: удар сверху — отпрыгнула (+15); касаться в прыжке — укус
+  for (let i = 0; i < Game.gaps.length; i++) {
+    const g = Game.gaps[i];
+    const d = g.dog;
+    if (!d || d.fled) continue;
+    const dsx = screenX(d.x);
+    if (dsx < -60 || dsx > W + 60) continue;
+    const topY = d.y - 46;
+    if (d.state !== 'jump') continue;
+    const overX = box.x + box.w > dsx - 15 && box.x < dsx + 15;
+    const onTop = box.y + box.h > topY + 4 && box.y + box.h < topY + 30 && cat.vy > 0;
+    if (overX && onTop) {
+      d.fled = true;
+      cat.vy = -520; cat.jumps = 1; cat.attackT = 0.25; cat.boostT = 0.5;
+      Game.dogsPassed++;
+      Game.score += 15 * mult;
+      SFX.star();
+      burst(dsx, topY + 8, '#FFE66D', 12, 200, 'spark');
+      addFloat('+15', dsx, topY - 20, COLORS.accent);
+      continue;
+    }
+    if (Game.invuln <= 0 && aabb(box.x, box.y, box.w, box.h, dsx - 19, topY + 6, 38, 34)) {
+      catHit();
     }
   }
   // предметы
@@ -1494,6 +1690,8 @@ function updateCollisions() {
         Game.stars++;
         Game.streak++;
         Game.combo = comboFor(Game.streak);
+        if (Game.combo > Game.maxCombo) Game.maxCombo = Game.combo;
+        Game.comboT = COMBO_TIME;
         const base = it.risk === 'insane' ? 30 : it.risk === 'risk' ? 20 : 10;
         const gain = base * Game.combo;
         Game.score += gain * mult;
@@ -1506,11 +1704,11 @@ function updateCollisions() {
         Game.fishSeen++;
         // поймал рыбку — кот довольно мурчит (иногда)
         if (Math.random() < 0.3) SFX.purr();
-        if (Save.activePerk === 'fisher' && Game.lives < CAT_LIVES) {
-          const heal = Math.min(CAT_LIVES - Game.lives, 2);
+        if (Save.activePerk === 'fisher' && Game.lives < Game.maxLives) {
+          const heal = Math.min(Game.maxLives - Game.lives, 2);
           Game.lives += heal;
           addFloat('❤️ +' + heal, sx, it.y - 18, '#FF8C69');
-        } else if (Game.lives < CAT_LIVES) {
+        } else if (Game.lives < Game.maxLives) {
           Game.lives++;
           addFloat('❤️ +1', sx, it.y - 18, '#FF8C69');
         } else {
@@ -1546,7 +1744,7 @@ function addFloat(txt, x, y, color) {
 }
 
 /* ===== §10 Частицы (пул, без аллокаций в цикле) ===== */
-const POOL = 200;
+const POOL = 400;
 for (let i = 0; i < POOL; i++) {
   Game.particles.push({ x:0, y:0, vx:0, vy:0, life:0, maxLife:1, size:2, color:'#fff', active:false, shape:'circle', rot:0, grav:900 });
 }
@@ -1601,15 +1799,41 @@ function updateShake(dt) {
 
 /* ===== §12 Рендер ===== */
 const ctx = canvas.getContext('2d');
+// сброс кэшей при ресайзе (заполняется позже, после объявления кэшей — TDZ не мешает)
+const canvasResetHooks = [];
 function setupCanvas() {
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   canvas.width = W * dpr;
   canvas.height = H * dpr;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  for (let i = 0; i < canvasResetHooks.length; i++) canvasResetHooks[i]();
 }
 setupCanvas();
 window.addEventListener('resize', setupCanvas);
 window.addEventListener('orientationchange', setupCanvas);
+// пиксельный стиль: даунскейл в временный холст и апскейл без сглаживания
+let pixTmp = null, pixTmpCtx = null;
+const PIXEL_K = 6;
+function setPixelMode(on) {
+  Save.pixel = !!on;
+  writeSave();
+  refreshMenu();
+}
+function pixelize() {
+  if (!pixTmp) {
+    pixTmp = document.createElement('canvas');
+    pixTmp.width = Math.max(2, Math.round(W / PIXEL_K));
+    pixTmp.height = Math.max(2, Math.round(H / PIXEL_K));
+    pixTmpCtx = pixTmp.getContext('2d');
+    pixTmpCtx.imageSmoothingEnabled = false;
+  }
+  pixTmpCtx.drawImage(canvas, 0, 0, canvas.width, canvas.height, 0, 0, pixTmp.width, pixTmp.height);
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(pixTmp, 0, 0, pixTmp.width, pixTmp.height, 0, 0, canvas.width, canvas.height);
+  ctx.restore();
+}
 
 // звёзды на небе (экранные координаты, параллакс 0.1)
 const SKY_STARS = [];
@@ -1668,6 +1892,12 @@ const GRADS = {};
 function getGrad(key, build) {
   return GRADS[key] || (GRADS[key] = build());
 }
+// при ресайзе чистим кэш градиентов и узора крыши — пересоздаются под новый контекст-ресайз
+canvasResetHooks.push(function() {
+  for (const k in GRADS) delete GRADS[k];
+  moonHalo = null;
+  roofPattern = null;
+});
 function drawBackground() {
   const pal = Game._palCache || skyPalette();
   const g = ctx.createLinearGradient(0, 0, 0, H);
@@ -1862,6 +2092,56 @@ function getRoofPattern(roofHex) {
   roofPattern = pat;
   return pat;
 }
+// пёс из ямы: вздыбленный корпус, голова с пастью и ушами, злые глаза
+function drawPitDog(cx0, d) {
+  const w = 46, h = 46;
+  const y = d.y;
+  const jumping = d.state === 'jump';
+  const dBody = '#A88860', dDark = '#7A5E3E', dLine = '#3A2A1A';
+  ctx.save();
+  ctx.strokeStyle = dDark; ctx.lineWidth = 5; ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(cx0 - w / 2 + 4, y - h * 0.5);
+  ctx.quadraticCurveTo(cx0 - w / 2 - 12, y - h * 0.8, cx0 - w / 2 - 14, y - h + (jumping ? -6 : 2));
+  ctx.stroke();
+  ctx.fillStyle = dBody; ctx.strokeStyle = dLine; ctx.lineWidth = 1.5;
+  const bodyH = jumping ? h + 4 : h;
+  roundRectPath(ctx, cx0 - w / 2, y - bodyH, w, bodyH, 8);
+  ctx.fill(); ctx.stroke();
+  // передние лапы — тянутся вверх в прыжке
+  ctx.fillStyle = dDark;
+  roundRectPath(ctx, cx0 - 14, y - bodyH + 2, 8, jumping ? 16 : 8, 3); ctx.fill();
+  roundRectPath(ctx, cx0 + 6, y - bodyH + 2, 8, jumping ? 16 : 8, 3); ctx.fill();
+  // голова с мордой и открытой пастью
+  const hy = y - bodyH;
+  ctx.fillStyle = dBody; ctx.strokeStyle = dLine;
+  ctx.beginPath(); ctx.arc(cx0, hy - 2, 12, 0, 6.283); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = dDark;
+  ctx.beginPath();
+  ctx.moveTo(cx0 - 8, hy - 12); ctx.lineTo(cx0 - 14, hy - 20); ctx.lineTo(cx0 - 1, hy - 15);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(cx0 + 8, hy - 12); ctx.lineTo(cx0 + 14, hy - 20); ctx.lineTo(cx0 + 1, hy - 15);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#FFF8E7';
+  ctx.beginPath(); ctx.arc(cx0 - 5, hy - 3, 2.6, 0, 6.283); ctx.fill();
+  ctx.beginPath(); ctx.arc(cx0 + 5, hy - 3, 2.6, 0, 6.283); ctx.fill();
+  ctx.fillStyle = '#1B1B1B';
+  ctx.beginPath(); ctx.arc(cx0 - 5, hy - 3, 1.3, 0, 6.283); ctx.fill();
+  ctx.beginPath(); ctx.arc(cx0 + 5, hy - 3, 1.3, 0, 6.283); ctx.fill();
+  // пасть: оскал в прыжке
+  if (jumping) {
+    ctx.fillStyle = '#8A2A2A';
+    ctx.beginPath(); ctx.ellipse(cx0, hy + 5, 6, 4, 0, 0, 6.283); ctx.fill();
+    ctx.fillStyle = '#FFFFFF';
+    ctx.beginPath(); ctx.moveTo(cx0 - 4, hy + 2); ctx.lineTo(cx0 - 2, hy + 5); ctx.lineTo(cx0 - 0, hy + 2); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(cx0 + 1, hy + 2); ctx.lineTo(cx0 + 3, hy + 5); ctx.lineTo(cx0 + 5, hy + 2); ctx.closePath(); ctx.fill();
+  } else {
+    ctx.strokeStyle = dLine; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(cx0 - 4, hy + 4); ctx.lineTo(cx0 + 4, hy + 4); ctx.stroke();
+  }
+  ctx.restore();
+}
 // крыша/земля со щелями
 function drawGround(pal) {
   const roof = mixHex(pal.near, '#000000', 0.55);
@@ -1942,12 +2222,21 @@ function drawGround(pal) {
     }
     ctx.restore();
   }
+  // собаки в ямах — выпрыгивают достать кота
+  for (let i = 0; i < Game.gaps.length; i++) {
+    const g = Game.gaps[i];
+    const d = g.dog;
+    if (!d || d.fled) continue;
+    const dsx = screenX(d.x);
+    if (dsx < -70 || dsx > W + 70) continue;
+    drawPitDog(dsx, d);
+  }
 }
 function currentSkin() {
   for (let i = 0; i < SKINS.length; i++) if (SKINS[i].id === Save.selected) return SKINS[i];
   return SKINS[0];
 }
-function drawCat(ctx2, x, yBottom, pose, t, skin, scale, tailA, claw) {
+function drawCat(ctx2, x, yBottom, pose, t, skin, scale, tailA, claw, lick) {
   scale = scale || 1;
   let sx = 1, sy = 1;
   if (pose === 'slide') { sx = 1.3; sy = 0.55; }
@@ -2342,6 +2631,21 @@ function drawCat(ctx2, x, yBottom, pose, t, skin, scale, tailA, claw) {
     ctx2.quadraticCurveTo(30, -38.6, 31.5, -37.4);
     ctx2.stroke();
   }
+  // язык: слизывает корм с миски — розовое пятно под носом
+  if (lick > 0) {
+    ctx2.strokeStyle = '#F0829E';
+    ctx2.lineWidth = 2.4;
+    ctx2.lineCap = 'round';
+    const wag = Math.sin(lick * 40) * 2;
+    ctx2.beginPath();
+    ctx2.moveTo(30, -37.6);
+    ctx2.quadraticCurveTo(31 + wag * 0.4, -34, 30 + wag, -31);
+    ctx2.stroke();
+    ctx2.fillStyle = '#F0829E';
+    ctx2.globalAlpha = Math.min(1, lick / 0.35) * 0.8;
+    ctx2.beginPath(); ctx2.arc(31 + wag, -29.5, 1.4, 0, 6.283); ctx2.fill();
+    ctx2.globalAlpha = 1;
+  }
   // усы — 4 линии веером от морды; в воздухе сносит назад
   const wsw = pose === 'jump' ? -3 : pose === 'fall' ? -5 : pose === 'slide' ? -4 : 0;
   ctx2.strokeStyle = 'rgba(60,30,40,0.55)';
@@ -2671,6 +2975,102 @@ function drawObstacles() {
         ctx.quadraticCurveTo(sx + o.w / 2 + s2 * 24 + sw2, o.y - 12, sx + o.w / 2 + s2 * 42 + sw2 * 2, o.y + 18);
         ctx.stroke();
       }
+    } else if (o.type === 'feeder') {
+      // человек выставил корм: шапка, шарф, куртка; миска — общая для котов
+      const pcx = sx + 10, bowlCX = sx + 23;
+      ctx.fillStyle = 'rgba(0,0,0,0.18)';
+      ctx.beginPath(); ctx.ellipse(bowlCX, GROUND_Y + 8, 15, 4, 0, 0, 6.283); ctx.fill();
+      if (!o.fin) {
+        // пока идёт — ноги шагают; встал — стоят
+        const walk = o.t > 0 && !o.placed ? Math.sin(o.t * 10 + o.ph) * 3 : 0;
+        ctx.fillStyle = '#414B52';
+        roundRectPath(ctx, pcx - 8 + walk * 0.3, GROUND_Y - 16, 7, 16, 3); ctx.fill();
+        roundRectPath(ctx, pcx + 2 - walk * 0.3, GROUND_Y - 16, 7, 16, 3); ctx.fill();
+        ctx.fillStyle = '#A8754B'; ctx.strokeStyle = '#6E4A2F'; ctx.lineWidth = 2;
+        roundRectPath(ctx, pcx - 11, GROUND_Y - 64, 22, 50, 6); ctx.fill(); ctx.stroke();
+        // голова, шапка, шарф
+        ctx.fillStyle = '#EDC0A0';
+        ctx.beginPath(); ctx.arc(pcx + 1, GROUND_Y - 70, 8.5, 0, 6.283); ctx.fill();
+        ctx.fillStyle = '#6B7C9C';
+        ctx.beginPath(); ctx.arc(pcx + 1, GROUND_Y - 72, 7.5, Math.PI, 0); ctx.closePath(); ctx.fill();
+        ctx.fillStyle = '#56647F';
+        roundRectPath(ctx, pcx - 6, GROUND_Y - 72, 14, 3, 1.5); ctx.fill();
+        ctx.fillStyle = '#E3A62F';
+        roundRectPath(ctx, pcx - 7, GROUND_Y - 62, 14, 6, 2); ctx.fill();
+        // рука держит миску
+        ctx.strokeStyle = '#A8754B'; ctx.lineWidth = 7; ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(pcx + 4, GROUND_Y - 56);
+        ctx.quadraticCurveTo(pcx + 12, o.bowlY - 4, bowlCX, o.bowlY + 2);
+        ctx.stroke();
+      }
+      // ореол-подсказка: миска светится, корм для котов
+      if (o.placed && !o.bowlEaten) {
+        ctx.save();
+        ctx.globalAlpha = 0.35 + 0.25 * (0.5 + 0.5 * Math.sin(tGlobal * 5 + o.ph));
+        ctx.fillStyle = '#FFE66D';
+        ctx.beginPath(); ctx.ellipse(bowlCX, o.bowlY + 4, 20, 12, 0, 0, 6.283); ctx.fill();
+        ctx.restore();
+      }
+      // миска: в руках или на крыше; корм — для котов
+      ctx.fillStyle = '#516E93';
+      roundRectPath(ctx, bowlCX - 13, o.bowlY + 3, 26, 8, 3); ctx.fill();
+      ctx.fillStyle = '#E9E6D6';
+      ctx.beginPath(); ctx.ellipse(bowlCX, o.bowlY + 3, 13, 3.5, 0, 0, 6.283); ctx.fill();
+      if (!o.bowlEaten) {
+        ctx.fillStyle = '#D8A453';
+        ctx.beginPath(); ctx.ellipse(bowlCX, o.bowlY + 3, 8, 3, 0, 0, 6.283); ctx.fill();
+      } else if (o.fin) {
+        // пустая миска и пар над ней — сытный след
+        ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.lineWidth = 1.2; ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(bowlCX - 3, o.bowlY - 2);
+        ctx.quadraticCurveTo(bowlCX, o.bowlY - 9 + Math.sin(tGlobal * 2 + o.ph) * 2, bowlCX + 3, o.bowlY - 14);
+        ctx.stroke();
+      }
+    } else if (o.type === 'kitten') {
+      // котёнок: серый пушистый комок, скачет на крыше
+      const cxK = sx + o.w / 2, fy = o.y + o.h;
+      ctx.fillStyle = 'rgba(0,0,0,0.15)';
+      ctx.beginPath(); ctx.ellipse(cxK, GROUND_Y + 8, 11, 3.5, 0, 0, 6.283); ctx.fill();
+      const kBody = '#AEB3BE', kDark = '#5F6672', kBelly = '#EDEEF2';
+      const tw = Math.sin(o.t * 2.3) * 4;
+      ctx.strokeStyle = kDark; ctx.lineWidth = 4; ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(cxK + 8, fy - 8);
+      ctx.quadraticCurveTo(cxK + 17, fy - 12 + tw, cxK + 19, fy - 20 + tw);
+      ctx.stroke();
+      ctx.fillStyle = kBody; ctx.strokeStyle = kDark; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.ellipse(cxK, fy - 9, 11, 8.5, 0, 0, 6.283); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = kBelly;
+      ctx.beginPath(); ctx.ellipse(cxK, fy - 8, 6, 4, 0, 0, 6.283); ctx.fill();
+      ctx.fillStyle = kDark;
+      ctx.beginPath(); ctx.ellipse(cxK - 7, fy - 1.5, 3, 2, 0, 0, 6.283); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(cxK + 5, fy - 1.5, 3, 2, 0, 0, 6.283); ctx.fill();
+      // головка повёрнута влево — к бегущему коту
+      const hx = cxK - 11, hy = fy - 17;
+      ctx.fillStyle = kBody;
+      ctx.beginPath(); ctx.moveTo(hx - 7, hy - 4); ctx.lineTo(hx - 9, hy - 12); ctx.lineTo(hx - 1, hy - 7); ctx.closePath(); ctx.fill(); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(hx + 1, hy - 5); ctx.lineTo(hx + 4, hy - 12); ctx.lineTo(hx + 7, hy - 4); ctx.closePath(); ctx.fill(); ctx.stroke();
+      ctx.beginPath(); ctx.arc(hx, hy, 7.5, 0, 6.283); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#FFF8E7';
+      ctx.beginPath(); ctx.arc(hx - 4, hy - 1, 2.6, 0, 6.283); ctx.fill();
+      ctx.beginPath(); ctx.arc(hx + 3, hy - 1, 2.6, 0, 6.283); ctx.fill();
+      ctx.fillStyle = '#20242A';
+      ctx.beginPath(); ctx.arc(hx - 4.5, hy - 1, 1.2, 0, 6.283); ctx.fill();
+      ctx.beginPath(); ctx.arc(hx + 2.5, hy - 1, 1.2, 0, 6.283); ctx.fill();
+      ctx.fillStyle = '#F0B5C0';
+      ctx.beginPath(); ctx.arc(hx - 1, hy + 3, 1.2, 0, 6.283); ctx.fill();
+      if (o.petted) {
+        // сердечко над главкой после поглаживания
+        ctx.save();
+        ctx.fillStyle = '#FF8CA0';
+        ctx.globalAlpha = 0.7 + 0.3 * Math.sin(o.t * 1.5);
+        ctx.font = 'bold 13px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('♥', hx, o.y - 10 + Math.sin(o.t * 1.2) * 3);
+        ctx.restore();
+      }
     }
   }
 }
@@ -2954,7 +3354,7 @@ function render() {
     const pose = cat.slideT > 0 ? 'slide' : cat.pose;
     // пружина хвоста (угол + перелёт от скорости) и «вцепившиеся когти»
     drawCat(ctx, CAT_X + CAT_W / 2, cat.y, pose, cat.animT, skin, 1,
-            cat.tailA + clamp(cat.tailV * 0.05, -0.4, 0.4), cat.clawG);
+            cat.tailA + clamp(cat.tailV * 0.05, -0.4, 0.4), cat.clawG, cat.lickT);
   }
   // шлейф комбо
   if (Game.combo >= 2) {
@@ -2999,7 +3399,7 @@ function render() {
 /* ===== §13 UI ===== */
 const $ = function(id) { return document.getElementById(id); };
 const elScore = $('hudScore'), elStars = $('hudStars'), elLives = $('hudLives'),
-      elCombo = $('hudCombo'), elGoal = $('hudGoal'),
+      elCombo = $('hudCombo'), elGoal = $('hudGoal'), elDist = $('hudDist'),
       elBest = $('hudBest'), elGhost = $('hudGhost'), elGraze = $('hudGraze'),
       elBtnPause = $('btnPause'), elBtnMute = $('btnMute');
 const scrMenu = $('screenMenu'), scrSkins = $('screenSkins'),
@@ -3056,7 +3456,8 @@ function hudLives() {
   const lost = lastLives >= 0 && Game.lives < lastLives;
   lastLives = Game.lives;
   let s = '';
-  for (let i = 0; i < CAT_LIVES; i++) s += heartSVG(i < Game.lives);
+  const cap = Game.maxLives || CAT_LIVES;
+  for (let i = 0; i < cap; i++) s += heartSVG(i < Game.lives);
   elLives.innerHTML = s;
   if (lost) {
     elLives.classList.remove('pulse');
@@ -3075,6 +3476,11 @@ function hudUpdate() {
     hudUpdate._lastStars = Game.stars;
     elStars.textContent = Game.stars;
   }
+  const dm = Math.floor(Game.distance / 10);
+  if (dm !== hudUpdate._lastDist) {
+    hudUpdate._lastDist = dm;
+    elDist.textContent = dm;
+  }
   hudLives();
   if (Game.combo >= 2) {
     const t = '×' + Game.combo;
@@ -3090,9 +3496,10 @@ function hudUpdate() {
   } else if (elCombo.style.display !== 'none') {
     elCombo.style.display = 'none';
   }
-  // цель рекорда: 🏆 и подсветка при побитии
-  const target = Game.daily ? Save.dayBest : Save.best;
-  const showBest = target > 0 && Game.state === 'playing';
+  // цель рекорда: 🏆 всегда видна (без рекорда — цель «первый рекорд» 500) и подсветка при побитии
+  let target = Game.daily ? Save.dayBest : Save.best;
+  if (target <= 0) target = 500;
+  const showBest = Game.state === 'playing';
   if (showBest) {
     const t = '🏆 ' + target;
     if (t !== hudUpdate._lastBestTxt) {
@@ -3272,6 +3679,12 @@ function refreshMenu() {
   ms.textContent = Save.dayStreak > 0 ? ' 🔥 серия ' + Save.dayStreak : '';
   document.getElementById('muteX').style.display = Save.muted ? 'none' : 'inline';
   elBtnMute.classList.toggle('muted', Save.muted);
+  // активный режим сложности
+  document.querySelectorAll('.diffBtn').forEach(function(b) {
+    b.classList.toggle('on', b.getAttribute('data-diff') === Save.difficulty);
+  });
+  $('btnGhostToggle').textContent = '👻 Призрак: ' + (Save.ghostOn ? 'вкл' : 'выкл');
+  $('btnPixelToggle').textContent = '🎨 Пиксель: ' + (Save.pixel ? 'вкл (X)' : 'выкл (X)');
 }
 // кнопки
 $('btnPlay').addEventListener('click', function() { startRun(false); });
@@ -3283,6 +3696,22 @@ $('btnSkins').addEventListener('click', function() {
   showScreen(scrSkins);
 });
 $('btnSkinsBack').addEventListener('click', function() { showScreen(scrMenu); });
+document.querySelectorAll('.diffBtn').forEach(function(b) {
+  b.addEventListener('click', function() {
+    Save.difficulty = b.getAttribute('data-diff');
+    writeSave();
+    refreshMenu();
+  });
+});
+$('btnGhostToggle').addEventListener('click', function() {
+  Save.ghostOn = !Save.ghostOn;
+  if (!Save.ghostOn) GHOST.on = false;
+  writeSave();
+  refreshMenu();
+});
+$('btnPixelToggle').addEventListener('click', function() {
+  setPixelMode(!Save.pixel);
+});
 $('btnResume').addEventListener('click', function() { resumeGame(); });
 $('btnRestart').addEventListener('click', function() { startRun(Game.daily); });
 $('btnMenu').addEventListener('click', function() { toMenu(); });
@@ -3426,6 +3855,13 @@ function gameOver() {
   })();
   $('overStars').textContent = Game.stars;
   $('overDust').textContent = gained;
+  // статистика забега
+  $('overStats').textContent =
+    '🐾 ' + Math.floor(Game.distance / 10) + ' м · ⚡ комбо ×' + Game.maxCombo +
+    ' · 🎯 passed ' + Game.obstaclesPassed +
+    ' · ✨ на волосок ' + Game.grazeCount +
+    ' · ⏱ ' + Math.floor(Game.runT / 60) + ':' + String(Math.floor(Game.runT % 60)).padStart(2, '0') +
+    (' · 🐊 ' + Game.dogsPassed);
   const rec = $('overRecord');
   const best = Game.daily ? Save.dayBest : Save.best;
   rec.textContent = isNew ? 'Новый рекорд!' : 'До рекорда ' + best + ' — ' + (best - sc) + ' очков';
@@ -3496,13 +3932,25 @@ function update(dt) {
     Game.grazeT -= dt;
     if (Game.grazeT <= 0) Game.grazeStreak = 0;
   }
+  Game.runT += dt;
+  // таймер комбо: без звёзд COMBO_TIME секунд — серия и множитель сгорают, даже без удара
+  if (Game.streak > 0) {
+    Game.comboT -= dt;
+    if (Game.comboT <= 0) { Game.streak = 0; Game.combo = 1; }
+  }
   if (Game.hitStop > 0) { Game.hitStop -= dt; return; }
+  // слоу-мо: человек с кормом въезжает — мир (и кот) в замедлении
+  let sdt = dt;
+  if (Game.slowT > 0) {
+    Game.slowT -= dt;
+    sdt = dt * FEEDER_SLOW;
+  }
   // скорость: базовая + прогресс + буст после удара сверху + перк «Тише едешь»
   if (cat.boostT > 0) cat.boostT -= dt;
   const boostMul = cat.boostT > 0 ? 1.35 : 1;
   const perkSpeedK = Save.activePerk === 'slower' ? 0.5 : 1;
-  Game.speed = Math.min(MAX_SPEED * 1.35, (BASE_SPEED + Math.floor(Game.score / 1000) * SPEED_STEP * perkSpeedK) * boostMul);
-  const dist = Game.speed * dt;
+  Game.speed = Math.min(MAX_SPEED * 1.35, ((BASE_SPEED + Math.floor(Game.score / MILESTONE) * SPEED_STEP * perkSpeedK) * Game.diffK) * boostMul);
+  const dist = Game.speed * sdt;
   Game.worldOffset += dist;
   Game.distance += dist;
   const mult = Game.scoreMultiplier || 1;
@@ -3520,7 +3968,7 @@ function update(dt) {
   Game.nextObsX -= dist;
   if (Game.nextObsX <= 0) {
     spawnObstacle();
-    let gap = SPAWN_GAP_MIN + randS(0, SPAWN_GAP_VAR) + Game.speed * SPAWN_SPEED_K;
+    let gap = (SPAWN_GAP_MIN + randS(0, SPAWN_GAP_VAR) + Game.speed * SPAWN_SPEED_K) * Game.gapK;
     if (Game.lastGap) gap += GAP_EXTRA;
     Game.nextObsX = gap;
   }
@@ -3546,7 +3994,7 @@ function update(dt) {
   for (let i = 0; i < Game.items.length; i++) {
     const it = Game.items[i];
     const keep = !it.dead && screenX(it.wx) > -250;
-    if (!keep && it.kind === 'fish' && !it.dead && !it.eventFish) Game.missedFish++;
+    if (!keep && (it.kind === 'fish' || it.kind === 'golden') && !it.dead && !it.eventFish) Game.missedFish++;
     if (keep) Game.items[wIdx++] = it;
   }
   Game.items.length = wIdx;
@@ -3557,24 +4005,82 @@ function update(dt) {
     if (o.moving) {
       o.y = o.baseY + Math.sin(cat.animT * 2 + o.ph) * o.amp;
     }
-    if (o.jig > 0) o.jig -= dt * 2.5;
-    if (o.pushT > 0) o.pushT -= dt;        // проседание батута после подскока   // дрожь трубы после «на волосок»
+    if (o.jig > 0) o.jig -= dt * 2.5;         // дрожь трубы после «на волосок»
+    if (o.pushT > 0) o.pushT -= dt;           // проседание батута после подскока
+    // человек с кормом: оживает, когда объект въехал в экран
+    if (o.type === 'feeder' && !o.fin) {
+      const fsx = screenX(o.wx);
+      if (fsx < W + 40) {
+        if (o.t < 0) {
+          o.t = 0;
+          // слоу-мо + внимание на миску
+          Game.slowT = 1.4;
+          SFX.purr();
+          addFloat('Кис-кис!', fsx + 23, GROUND_Y - 120, COLORS.accent);
+        }
+        o.t += sdt;
+        if (o.t > 0.5 && !o.placed) {      // опускает миску на крышу
+          const drop = clamp((o.t - 0.5) / 0.7, 0, 1);
+          o.bowlY = (GROUND_Y - 46) + 32 * drop;
+          if (drop >= 1) {
+            o.placed = true;
+            if (!o.bowlEaten) SFX.purr();  // коты окрестностей одобряют
+          }
+        }
+        if (o.t > 4.4) o.fin = true;       // человек доложил и ушёл
+      }
+    }
+    // котёнок: фаза прыжков и хвоста
+    if (o.type === 'kitten' && !o.dead) o.t += sdt * (3 + Math.sin(o.t * 0.7) * 1.2);
     if (o.type === 'fallingIce' && !o.started) {
       const sx = screenX(o.wx);
       if (sx < W - 40) o.started = true;
     }
-    if (o.type === 'fallingIce' && o.started) {
-      o.fallSpeed += 1600 * dt;
-      o.y += o.fallSpeed * dt;
+    if (o.type === 'fallingIce' && o.started && !o.dead) {
+      o.fallSpeed += 1600 * sdt;
+      o.y += o.fallSpeed * sdt;
+      // лёд бьётся о крышу: осколки и исчезает, не долетает до кота
+      if (o.y + o.h >= GROUND_Y) {
+        o.dead = true; o.passed = true;
+        burst(screenX(o.wx) + o.w / 2, GROUND_Y, '#C5E8F7', 10, 220, 'spark');
+        SFX.shield();
+        if (Game.shakeTime <= 0) Game.shakeTime = 0.12;
+      }
+    }
+    // испуганный голубь из стаи: драпает вверх и растворяется в небе
+    if (o.fleeT > 0) {
+      o.y -= (280 + o.fleeT * 220) * sdt;
+      o.fleeT += sdt;
+      if (o.y < -80) { o.dead = true; o.passed = true; }
     }
   }
-  catUpdate(dt);
+  // собаки в яме: заметили кота у края — выпрыгивают достать его
+  const catWX = Game.worldOffset + CAT_X + CAT_W / 2;
+  for (let i = 0; i < Game.gaps.length; i++) {
+    const dg = Game.gaps[i].dog;
+    if (!dg || dg.fled) continue;
+    const inR = catWX > dg.x - Game.gaps[i].w / 2 - 90 && catWX < dg.x + Game.gaps[i].w / 2 + 60;
+    if (dg.state === 'wait' && inR) {
+      dg.state = 'jump';
+      dg.vy = -560;
+      SFX.yowl();
+    }
+    if (dg.state === 'jump') {
+      dg.vy += 900 * sdt;
+      dg.y += dg.vy * sdt;
+      if (dg.y > H + 46) {
+        dg.y = H + 46; dg.vy = 0;
+        if (inR) { dg.vy = -560; SFX.yowl(); } else dg.state = 'wait';
+      }
+    }
+  }
+  catUpdate(sdt);
   updateCollisions();
-  updateParticles(dt);
+  updateParticles(sdt);
   updateShake(dt);
   // события (таймер в очках: событие каждые ~2000–3000 очков)
   if (Game.currentEvent) {
-    Game.currentEventT -= dt;
+    Game.currentEventT -= sdt;
     if (Game.currentEventK === 'blizzard') Game.blizzardT = Game.currentEventT;
     if (Game.currentEventK === 'downpour') Game.downpourT = Game.currentEventT;
     if (Game.currentEventK === 'gust') Game.gustT = Game.currentEventT;
@@ -3626,6 +4132,7 @@ function frame(now) {
   }
   if (steps === 5) acc = 0;
   render();
+  if (Save.pixel) pixelize();
 }
 /* ===== Инициализация ===== */
 loadSave();
